@@ -144,7 +144,18 @@ class _HomePageScreenState extends State<HomePageScreen> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title: const Text("Edu-HUB", style: TextStyle(color: Colors.white)),
+        title:  Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Image.asset(
+                'assets/EDU-HUB logo trnsp.png', // Path to your logo image
+                height: 120, // Adjust the height to fit your needs
+              ),
+            ),
+            const SizedBox(width: 10),
+          ],
+        ),
         actions: [
           Padding(
             padding: const EdgeInsets.all(8.0),
@@ -154,10 +165,6 @@ class _HomePageScreenState extends State<HomePageScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      widget.user.email ?? 'No Email',
-                      style: const TextStyle(color: Colors.white),
-                    ),
                     if (widget.user.displayName != null)
                       Text(
                         widget.user.displayName!,
@@ -208,7 +215,7 @@ class _HomePageScreenState extends State<HomePageScreen> {
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Colors.black, Colors.red],
+            colors: [Colors.black, Colors.blueAccent],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -237,7 +244,7 @@ class _HomePageScreenState extends State<HomePageScreen> {
             MaterialPageRoute(builder: (context) => CreatorScreen(user: widget.user)),
           );
         },
-        backgroundColor: Colors.red,
+        backgroundColor: Colors.blue,
         child: const Icon(Icons.add),
       ),
     );

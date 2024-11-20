@@ -52,7 +52,7 @@ class _LoginScreenState extends State<LoginScreen> {
           padding: const EdgeInsets.all(45.0),
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [Colors.black, Colors.red],
+              colors: [Colors.black, Colors.blue],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -91,7 +91,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ElevatedButton(
                 onPressed: _signInWithGoogle,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red,
+                  backgroundColor: Colors.black,
                   padding: EdgeInsets.symmetric(
                     vertical: screenWidth * 0.04,
                     horizontal: screenWidth * 0.08,
