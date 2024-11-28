@@ -94,7 +94,7 @@ class _CreatorScreenState extends State<CreatorScreen> {
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Video and thumbnail successfully uploaded.')),
+        const SnackBar(content: Text('Video is successfully uploaded.')),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
