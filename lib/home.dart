@@ -115,18 +115,18 @@ class _HomePageScreenState extends State<HomePageScreen> {
     }
   }
 
+  Future<void> _refreshVideos() async {
+    await _fetchInitialVideos();
+  }
+
   Future<void> incrementViewCount(String videoId) async {
     try {
       DocumentSnapshot doc = await FirebaseFirestore.instance.collection('videos').doc(videoId).get();
 
       if (doc.exists) {
-        print('Document found, proceeding with view count increment.');
-
         await FirebaseFirestore.instance.collection('videos').doc(videoId).update({
           'viewCount': FieldValue.increment(1),
         });
-
-        print('View count incremented successfully.');
       } else {
         print('Document with videoId: $videoId does not exist.');
       }
@@ -144,7 +144,7 @@ class _HomePageScreenState extends State<HomePageScreen> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title:  Row(
+        title: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Expanded(
@@ -179,30 +179,16 @@ class _HomePageScreenState extends State<HomePageScreen> {
                     radius: 20,
                   ),
                 IconButton(
-                  icon: const Icon(Icons.logout),
-                  color: Colors.white,
-                  onPressed: () async {
-                    try {
-                      await FirebaseAuth.instance.signOut();
-                      Navigator.of(context).pushReplacementNamed('/login');
-                    } catch (e) {
-                      print('Error signing out: $e');
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Failed to sign out. Please try again.'),
-                        ),
-                      );
-                    }
-                  },
-                ),
-                IconButton(
                   icon: const Icon(Icons.account_circle),
                   color: Colors.white,
                   onPressed: () {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => ChannelPage(userId: widget.user.uid, userName: widget.user.displayName ?? 'User'),
+                        builder: (context) => ChannelPage(
+                          userId: widget.user.uid,
+                          userName: widget.user.displayName ?? 'User',
+                        ),
                       ),
                     );
                   },
@@ -211,41 +197,35 @@ class _HomePageScreenState extends State<HomePageScreen> {
             ),
           ),
         ],
+
       ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Colors.black, Colors.blueAccent],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+      body: RefreshIndicator(
+        onRefresh: _refreshVideos, // Add refresh functionality here
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Colors.black, Colors.blueAccent],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: ListView.builder(
+            controller: _scrollController,
+            itemCount: _videos.length + 1, // Add 1 for the loading indicator
+            itemBuilder: (context, index) {
+              if (index < _videos.length) {
+                return VideoTile(
+                  videoData: _videos[index],
+                  onVideoTap: (videoId) async => await onWatchVideoButtonTapped(videoId), // Corrected callback
+                );
+              } else if (_isLoading) {
+                return const Center(child: CircularProgressIndicator());
+              } else {
+                return const SizedBox(); // Empty space when not loading more
+              }
+            },
           ),
         ),
-        child: ListView.builder(
-          controller: _scrollController,
-          itemCount: _videos.length + 1, // Add 1 for the loading indicator
-          itemBuilder: (context, index) {
-            if (index < _videos.length) {
-              return VideoTile(
-                videoData: _videos[index],
-                onVideoTap: (videoId) async => await onWatchVideoButtonTapped(videoId), // Corrected callback
-              );
-            } else if (_isLoading) {
-              return const Center(child: CircularProgressIndicator());
-            } else {
-              return const SizedBox(); // Empty space when not loading more
-            }
-          },
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => CreatorScreen(user: widget.user)),
-          );
-        },
-        backgroundColor: Colors.blue,
-        child: const Icon(Icons.add),
       ),
     );
   }

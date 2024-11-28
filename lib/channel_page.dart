@@ -71,6 +71,14 @@ class _ChannelPageState extends State<ChannelPage> {
           );
         },
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          Navigator.pop(context); // Return to Home Page
+        },
+        child: const Icon(Icons.home),
+        backgroundColor: Colors.blue,
+      ),
+
     );
   }
 }

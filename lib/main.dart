@@ -1,11 +1,12 @@
+import 'package:EduHub/selectRolePage.dart';
 import 'package:flutter/material.dart';
-import 'firebaseInit/firebase_initializer.dart';
-import 'home.dart'; // Import your home screen
-import 'login.dart'; // Import your login screen
+import 'firebaseInit/firebase_initializer.dart'; // Ensure Firebase is initialized
+import 'home.dart'; // Home screen
+import 'login.dart'; // Login screen
 import 'package:firebase_auth/firebase_auth.dart';
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized(); // Ensures that plugin services are initialized before runApp.
+  WidgetsFlutterBinding.ensureInitialized(); // Ensures services are initialized before runApp
   await initializeFirebase(); // Initialize Firebase
   runApp(const MyApp());
 }
@@ -18,19 +19,15 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Edu Hub',
       debugShowCheckedModeBanner: false,
-      initialRoute: '/login', // Set the initial route to login
+      home: FirebaseAuth.instance.currentUser == null
+          ? const LoginScreen()
+          : SelectRolePage(user: FirebaseAuth.instance.currentUser!), // Show HomePage if already signed in
       routes: {
         '/login': (context) => const LoginScreen(),
-      },
-      onGenerateRoute: (settings) {
-        if (settings.name == '/home') {
-          final user = settings.arguments as User; // Extract user from arguments
-          return MaterialPageRoute(
-            // builder: (context) => HomePageScreen(user: user),
-            builder: (context) => HomePageScreen(user: user),
-          );
-        }
-        return null; // Return null if the route is not found
+        '/home': (context) {
+          final user = FirebaseAuth.instance.currentUser!;
+          return HomePageScreen(user: user); // Ensure User is passed to HomePage
+        },
       },
     );
   }

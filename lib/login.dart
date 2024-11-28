@@ -1,8 +1,10 @@
+import 'package:EduHub/register.dart';
+import 'package:EduHub/selectRolePage.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'auth_service.dart';
 import 'home.dart';
-import 'register_screen.dart'; // Import the registration screen
+ // Import the registration screen
 import 'package:animated_text_kit/animated_text_kit.dart'; // Import the package for animation
 
 class LoginScreen extends StatefulWidget {
@@ -27,7 +29,7 @@ class _LoginScreenState extends State<LoginScreen> {
       // Navigate to the Home screen
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (context) => HomePageScreen(user: user)),
+        MaterialPageRoute(builder: (context) => SelectRolePage(user: user)),
       );
     } else {
       print('Failed to sign in with Google');
@@ -112,7 +114,10 @@ class _LoginScreenState extends State<LoginScreen> {
               // Register button
               ElevatedButton(
                 onPressed: () {
-                  // add the Creator Registration logic
+                  Navigator.push(
+                           context,
+                           MaterialPageRoute(builder: (context) => const RegisterPage()),
+                       );
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.green,
