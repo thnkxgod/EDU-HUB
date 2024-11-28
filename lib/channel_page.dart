@@ -27,7 +27,12 @@ class _ChannelPageState extends State<ChannelPage> {
           .where('userId', isEqualTo: widget.userId)
           .get();
 
-      final videos = snapshot.docs.map((doc) => doc.data()).toList();
+      // Add 'id' field to each video document
+      final videos = snapshot.docs.map((doc) => {
+        ...doc.data(),
+        'id': doc.id, // Use 'id' consistently across the app
+      }).toList();
+
       setState(() {
         _userVideos = videos;
       });
@@ -36,11 +41,12 @@ class _ChannelPageState extends State<ChannelPage> {
     }
   }
 
-  void _deleteVideo(String videoId) async {
+  void _deleteVideo(String documentId) async {
     try {
-      await FirebaseFirestore.instance.collection('videos').doc(videoId).delete();
+      print('Deleting video with ID: $documentId'); // Debugging log
+      await FirebaseFirestore.instance.collection('videos').doc(documentId).delete();
       setState(() {
-        _userVideos.removeWhere((video) => video['id'] == videoId);
+        _userVideos.removeWhere((video) => video['id'] == documentId);
       });
     } catch (e) {
       print('Error deleting video: $e');
@@ -52,21 +58,32 @@ class _ChannelPageState extends State<ChannelPage> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title: Text('${widget.userName}\'s Channel'),
+        title: Text(
+          '${widget.userName}\'s Channel',
+          style: const TextStyle(color: Colors.white),
+        ),
       ),
-      body: ListView.builder(
+      body: _userVideos.isEmpty
+          ? const Center(
+        child: Text(
+          'No videos found.',
+          style: TextStyle(fontSize: 16, color: Colors.grey),
+        ),
+      )
+          : ListView.builder(
         itemCount: _userVideos.length,
         itemBuilder: (context, index) {
           final video = _userVideos[index];
           return ListTile(
-            title: Text(video['title']),
-            subtitle: Text(video['description']),
+            title: Text(video['title'] ?? 'No Title'),
+            subtitle: Text(video['description'] ?? 'No Description'),
             trailing: IconButton(
-              icon: Icon(Icons.delete),
+              icon: const Icon(Icons.delete),
               onPressed: () => _deleteVideo(video['id']),
             ),
             onTap: () {
-              // Navigate to edit page or video details
+              // Add navigation to the video details or edit page if required
+              print('Tapped on video: ${video['id']}');
             },
           );
         },
@@ -78,7 +95,6 @@ class _ChannelPageState extends State<ChannelPage> {
         child: const Icon(Icons.home),
         backgroundColor: Colors.blue,
       ),
-
     );
   }
 }
