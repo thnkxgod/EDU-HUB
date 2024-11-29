@@ -304,3 +304,90 @@ class VideosListState extends State<VideosList> {
     );
   }
 }
+class SubscriptionTab extends StatelessWidget {
+  const SubscriptionTab({Key? key}) : super(key: key);
+
+  Future<List<String>> _getUserSubscriptions() async {
+    User? currentUser = FirebaseAuth.instance.currentUser;
+
+    if (currentUser != null) {
+      DocumentSnapshot userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .get();
+
+      // Retrieve the subscriptions array from the user's Firestore document
+      List<String> subscriptions =
+      List<String>.from(userDoc['subscriptions'] ?? []);
+      return subscriptions;
+    } else {
+      return [];
+    }
+  }
+
+  Stream<List<QueryDocumentSnapshot>> _getSubscribedVideos(
+      List<String> subscriptions) {
+    if (subscriptions.isEmpty) {
+      return Stream.value([]); // Return an empty stream if no subscriptions
+    }
+
+    return FirebaseFirestore.instance
+        .collection('videos')
+        .where('userId', whereIn: subscriptions)
+        .snapshots()
+        .map((snapshot) => snapshot.docs);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<String>>(
+      future: _getUserSubscriptions(),
+      builder: (context, subscriptionSnapshot) {
+        if (subscriptionSnapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (subscriptionSnapshot.hasError) {
+          return const Center(child: Text('Error loading subscriptions.'));
+        }
+
+        List<String> subscriptions = subscriptionSnapshot.data ?? [];
+
+        return StreamBuilder<List<QueryDocumentSnapshot>>(
+          stream: _getSubscribedVideos(subscriptions),
+          builder: (context, videoSnapshot) {
+            if (videoSnapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            if (videoSnapshot.hasError) {
+              return const Center(child: Text('Error loading videos.'));
+            }
+
+            List<QueryDocumentSnapshot> videos = videoSnapshot.data ?? [];
+
+            if (videos.isEmpty) {
+              return const Center(
+                  child: Text('No videos from your subscriptions.'));
+            }
+
+            return ListView.builder(
+              itemCount: videos.length,
+              itemBuilder: (context, index) {
+                Map<String, dynamic> videoData =
+                videos[index].data() as Map<String, dynamic>;
+
+                return VideoTile(
+                  videoData: videoData,
+                  onVideoTap: (String videoId) async {
+                    // Add any additional behavior here if needed
+                  },
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+}
