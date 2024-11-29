@@ -4,17 +4,56 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:intl/intl.dart'; // For date formatting
 import 'package:firebase_auth/firebase_auth.dart';
-import 'videoControl.dart';
 
 class VideoTile extends StatelessWidget {
   final Map<String, dynamic> videoData;
-  final Future<void> Function(String videoId) onVideoTap; // Callback parameter
+  final Future<void> Function(String videoId) onVideoTap;
+  final bool showSubscribeButton; // New parameter to control button visibility
 
   const VideoTile({
     super.key,
     required this.videoData,
     required this.onVideoTap,
+    this.showSubscribeButton = true, // Default is true
   });
+
+  Future<bool> _isSubscribed(String uploaderId) async {
+    String currentUserId = FirebaseAuth.instance.currentUser!.uid;
+    DocumentSnapshot userDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUserId)
+        .get();
+
+    if (userDoc.exists) {
+      List<dynamic> subscriptions = userDoc['subscriptions'] ?? [];
+      return subscriptions.contains(uploaderId);
+    }
+    return false;
+  }
+
+  Future<void> _subscribeToUser(String uploaderId, BuildContext context) async {
+    String currentUserId = FirebaseAuth.instance.currentUser!.uid;
+    DocumentReference userRef = FirebaseFirestore.instance.collection('users').doc(currentUserId);
+
+    // Check if the user document exists, if not, create it
+    DocumentSnapshot userDoc = await userRef.get();
+    if (!userDoc.exists) {
+      await userRef.set({
+        'subscriptions': [],
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      print('Created new user document for $currentUserId');
+    }
+
+    // Now, update the subscriptions
+    await userRef.update({
+      'subscriptions': FieldValue.arrayUnion([uploaderId]),
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Subscribed to ${videoData['userName']}!')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -22,13 +61,11 @@ class VideoTile extends StatelessWidget {
     final String description = videoData['description'] ?? 'No Description';
     final String url = videoData['url'] ?? '';
     final String thumbnailUrl = videoData['thumbnailUrl'] ?? '';
-
-    // Safely retrieve and cast the 'timestamp' field from Firestore
-    final Timestamp? timestamp = videoData['timestamp'] as Timestamp?;
+    final String userId = videoData['userId'] ?? 'defaultUserId';
     final String userName = videoData['userName'] ?? 'Unknown User';
-    final int viewCount = videoData['viewCount'] ?? 0; // Set default view count to 0
+    final int viewCount = videoData['viewCount'] ?? 0;
 
-    // Format the date if timestamp exists
+    final Timestamp? timestamp = videoData['timestamp'] as Timestamp?;
     String formattedDate = 'Unknown Date';
     if (timestamp != null) {
       final DateTime dateTime = timestamp.toDate();
@@ -40,11 +77,7 @@ class VideoTile extends StatelessWidget {
         User? currentUser = FirebaseAuth.instance.currentUser;
 
         if (currentUser != null) {
-          String videoId = videoData['id'] ?? 'defaultVideoId'; // Use 'id' instead of 'videoId'
-          String userId = videoData['userId'] ?? 'defaultUserId';
-
-          print("Video ID: $videoId");
-          print("User ID: $userId");
+          String videoId = videoData['id'] ?? 'defaultVideoId';
 
           await onVideoTap(videoId);
 
@@ -60,11 +93,7 @@ class VideoTile extends StatelessWidget {
                 ),
               ),
             );
-          } else {
-            print('Invalid videoId or userId');
           }
-        } else {
-          print('User is not logged in');
         }
       },
       child: Card(
@@ -83,12 +112,48 @@ class VideoTile extends StatelessWidget {
             ),
             Padding(
               padding: const EdgeInsets.all(8.0),
-              child: Text(
-                '$viewCount views',
-                style: const TextStyle(
-                  fontSize: 12.0,
-                  color: Colors.grey,
-                ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '$viewCount views',
+                    style: const TextStyle(
+                      fontSize: 12.0,
+                      color: Colors.grey,
+                    ),
+                  ),
+                  if (showSubscribeButton)
+                    FutureBuilder<bool>(
+                      future: _isSubscribed(userId),
+                      builder: (context, snapshot) {
+                        final isSubscribed = snapshot.data ?? false;
+
+                        return ElevatedButton(
+                          onPressed: isSubscribed
+                              ? null // Disable the button if already subscribed
+                              : () async {
+                            try {
+                              await _subscribeToUser(userId, context);
+                            } catch (e) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Error adding subscription: $e')),
+                              );
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isSubscribed ? Colors.grey : Colors.blue,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20.0),
+                            ),
+                          ),
+                          child: Text(
+                            isSubscribed ? 'Subscribed' : 'Subscribe',
+                            style: const TextStyle(fontSize: 12.0, color: Colors.white),
+                          ),
+                        );
+                      },
+                    ),
+                ],
               ),
             ),
             Padding(
@@ -135,6 +200,5 @@ class VideoTile extends StatelessWidget {
     );
   }
 }
-
 
 
