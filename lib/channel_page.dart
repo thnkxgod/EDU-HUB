@@ -70,24 +70,33 @@ class _ChannelPageState extends State<ChannelPage> {
           style: TextStyle(fontSize: 16, color: Colors.grey),
         ),
       )
-          : ListView.builder(
-        itemCount: _userVideos.length,
-        itemBuilder: (context, index) {
-          final video = _userVideos[index];
-          return ListTile(
-            title: Text(video['title'] ?? 'No Title'),
-            subtitle: Text(video['description'] ?? 'No Description'),
-            trailing: IconButton(
-              icon: const Icon(Icons.delete),
-              onPressed: () => _deleteVideo(video['id']),
-            ),
-            onTap: () {
-              // Add navigation to the video details or edit page if required
-              print('Tapped on video: ${video['id']}');
-            },
-          );
-        },
-      ),
+          : Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Colors.black, Colors.blue],
+            begin: Alignment.centerLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+            child: ListView.builder(
+                    itemCount: _userVideos.length,
+                    itemBuilder: (context, index) {
+            final video = _userVideos[index];
+            return ListTile(
+              title: Text(video['title'] ?? 'No Title'),
+              subtitle: Text(video['description'] ?? 'No Description',style: TextStyle(color: Colors.white),),
+              trailing: IconButton(
+                icon: const Icon(Icons.delete),
+                onPressed: () => _deleteVideo(video['id']),
+              ),
+              onTap: () {
+                // Add navigation to the video details or edit page if required
+                print('Tapped on video: ${video['id']}');
+              },
+            );
+                    },
+                  ),
+          ),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
           Navigator.pop(context); // Return to Home Page
