@@ -1,0 +1,2690 @@
+import DOMPurify from "dompurify";
+import LinkiFy from "linkify-react";
+import * as linkify from "linkifyjs";
+import { use, useEffect, useRef, useState } from "react";
+import Draggable from "react-draggable";
+import { toast } from "react-toastify";
+import { searchQA } from "../../ChatBotServices/ChatApi";
+import { useCallback } from "react";
+import { Loader } from "../../Common/Loader";
+import {
+  addRandomUser,
+  insertConnectionDetail,
+  insertUnAnsweredQuestionId,
+  postChatMessage,
+  postUnansweredQuestion,
+  postUserAgentMessage,
+  updateConnectionEndTime,
+  updateUserNameorEmail,
+} from "../../ChatBotServices/userOrBotChat";
+import { ChatRoles } from "../../Enum/ChatRoles";
+import { getPrevChatByUserId } from "../../ChatBotServices/userOrBotChat";
+import "./Chatbot.css";
+import { set, status } from "nprogress";
+import { FaPaperPlane, FaSpinner } from "react-icons/fa";
+import { GiBrain } from "react-icons/gi";
+import { useWebSocketContext } from "./chatbotContext/WebSocketContext";
+import messageSvg from "../../../assets/icons/Message-icon.svg";
+import sendSvg from "../../../assets/icons/Sent.svg";
+import UserPng from "../../../assets/icons/BUSINESSMAN.png";
+import agentPng from "../../../assets/icons/user-profile.png";
+import { AiOutlineArrowDown } from "react-icons/ai";
+import expertSvg from "../../../assets/icons/expert-chatbot.svg";
+import { Navigate, useNavigate } from "react-router-dom";
+import ConfirmModal from "../../WarningModel/ConfirmModal";
+import { logoutUser } from "../../ApiServices/AuthApi";
+function Chatbot() {
+  const [isLoggedIN, setIsLoggedin] = useState(null);
+  const PageSize = 20;
+  const authChannel = new BroadcastChannel("auth");
+  const [pageIndex, setPageIndex] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [isInfiniteLoading, setIsInfiniteLoading] = useState(false);
+  const [isOpen, setIsOpen] = useState(false);
+  const [showWarningModal, setshowWarningModal] = useState(false);
+  const [messages, setMessages] = useState([
+    {
+      status: "",
+      type: "bot",
+      text: "Hello! How can I help you today?",
+      messageType: "",
+      time: "",
+      time: "",
+    },
+  ]);
+  const [showPreQuestion, setshowPreQuestion] = useState(false);
+  const [preMessages, setpreMessages] = useState([
+    { status: "", type: "user", text: "Hello, how are you?" },
+    { status: "", type: "user", text: "What are your services?" },
+    { status: "", type: "user", text: "Can you help me with the problem?" },
+  ]);
+  const [position, setPosition] = useState({ x: -28, y: 110 });
+  const [lastTap, setLastTap] = useState(0);
+  const [MsgStatus, setmsgStatus] = useState("");
+  const [input, setInput] = useState("");
+  const [timeLeft, setTimeLeft] = useState(120); // 2 minutes = 120 seconds
+  const intervalRef = useRef(null);
+  const [userDetail, setUserDetail] = useState({
+    name: null,
+    email: null,
+    uniqueIdentity: null,
+  });
+  const [user, setUser] = useState({
+    name: null,
+    email: null,
+    uniqueIdentity: null,
+  });
+  const [userIdFromDb, setUserIdFromDb] = useState(0);
+  const nodeRef = useRef(null);
+  const lastProcessedMessageId = useRef(null);
+  const [showWarningModalForClearChat, setshowWarningModalForClearChat] =
+    useState(false);
+
+  const {
+    wsRef,
+    paired,
+    setpaired,
+    isUserLoggedIn,
+    setIsUserLoggedIn,
+    connectToAgentBtn,
+    setconnectToAgentBtn,
+  } = useWebSocketContext();
+
+  const MAX_MESSAGE_TO_BOT_LENGTH = 200;
+  const MAX_MESSAGE_TO_AGENT_LENGTH = 3500;
+  const [msgTOBot, setmsgToBot] = useState(true);
+  const observer = useRef();
+  var endOfMessagesRef = useRef(null);
+  const [partner_disconnected, setPartnerDisconnected] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [showUserDetailModal, setShowUserDetailModal] = useState(false);
+  const typingTimeoutRef = useRef(null);
+  const [isAgentTyping, setIsAgentTyping] = useState(false);
+  const [scrollintoView, setscrollintoView] = useState(true);
+  const [showLatestMessage, setshowLatestMessage] = useState(false);
+  var IsOnline = navigator.onLine;
+  const [alreadySeen, setalreadySeen] = useState(false);
+  const [connectionId, setConnectionId] = useState(
+    localStorage.getItem("connectionId")
+  );
+  var ConnectedAgent = localStorage.getItem("ConnectedAgent");
+  const VailidateEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const ValidateName = /^[A-Za-z\s]+$/;
+  const userRandomId = localStorage.getItem("guestUserId");
+  var messageCount = useRef(0);
+  const lastPostElementRef = useCallback(
+    (node) => {
+      if (!loading) return;
+      if (observer.current) observer.current.disconnect();
+      observer.current = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+          setIsInfiniteLoading(true);
+          setPageIndex((prevPage) => prevPage + 1); // trigger loading of new posts by chaging page no
+        }
+      });
+
+      if (node) observer.current.observe(node);
+    },
+    [loading]
+  );
+
+  // we use it here for rerender the component to show number of new message
+  const [messageCountUI, setMessageCountUI] = useState(0);
+
+  const clickableLinkProperties = {
+    target: "_blank", // open in a new tab
+    rel: "noopener noreferrer", // security best practice
+    className: "chat-link", // optional custom style
+  };
+
+  const [clearConversation, setClearConversation] = useState(false);
+
+  // Register standard + custom protocols
+  // ["tel", "wss", "ws"].forEach((proto) =>
+  //   linkify.registerCustomProtocol(proto)
+  // );
+  const [showMenu, setShowMenu] = useState(false);
+  const navigate = useNavigate();
+
+  const handleModalResponse = async (choice) => {
+    setshowWarningModal(false);
+    setshowWarningModalForClearChat(false);
+    if (choice !== "yes") return;
+    // // No socket → act immediately
+    isLoggedIN ? performLogout() : performClearSession();
+  };
+
+  const performLogout = async () => {
+    try {
+      // End conversation ONLY if paired
+      if (wsRef?.current?.readyState === WebSocket.OPEN && paired === true) {
+        await updateConnectionEndTime({
+          connectionId: localStorage.getItem("connectionId"),
+          endTime: new Date().toISOString(),
+        });
+      }
+
+      //  Close socket if it exists (paired or not)
+      if (wsRef?.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.close();
+      }
+    } catch (err) {
+      console.error("Connection cleanup failed", err);
+    }
+
+    localStorage.clear();
+    setconnectToAgentBtn(false);
+    window.dispatchEvent(new Event("manualLogout"));
+    authChannel.postMessage({ type: "logout" });
+    toast.success("Logged out successfully!");
+    navigate("/blog");
+  };
+
+  const performClearSession = async () => {
+    try {
+      // First, try to end the connection properly if WebSocket is open
+      if (wsRef?.current?.readyState === WebSocket.OPEN) {
+        // If we have a connectionId and it's a real connection (not just bot chat)
+        if (localStorage.getItem("connectionId") && paired === true) {
+          try {
+            const endConnection = {
+              connectionId: localStorage.getItem("connectionId"),
+              endTime: new Date().toISOString(),
+            };
+
+            const response = await updateConnectionEndTime(endConnection);
+            // Check response based on your API structure
+            // You might need to adjust this based on actual response
+            if (response?.data?.result === 1 || response?.result === 1) {
+              console.log("Connection ended successfully");
+            } else {
+              console.warn(
+                "Failed to update connection end time, but continuing with clear"
+              );
+            }
+          } catch (err) {
+            console.error("Error updating connection end time:", err);
+            // Continue with clear even if this fails
+          }
+        }
+
+        // Close WebSocket connection regardless
+        wsRef.current.close();
+      }
+    } catch (err) {
+      console.error("Error in WebSocket cleanup:", err);
+      // Continue with clear even if cleanup fails
+    }
+
+    // Clear localStorage
+    localStorage.clear();
+
+    // Reset all states
+    setIsLoggedin(null);
+
+    setPageIndex(1);
+    setLoading(true);
+    setIsInfiniteLoading(false);
+    setIsOpen(false);
+    setMessages([
+      {
+        status: "",
+        type: "bot",
+        text: "Hello! How can I help you today?",
+        time: new Date(),
+      },
+    ]);
+    setshowPreQuestion(false);
+    setpreMessages([
+      { status: "", type: "user", text: "Hello, how are you?" },
+      { status: "", type: "user", text: "What are your services?" },
+      { status: "", type: "user", text: "Can you help me with the problem?" },
+    ]);
+    setPosition({ x: -28, y: 110 });
+    setLastTap(0);
+    setInput("");
+    setTimeLeft(120);
+
+    // Clear interval
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
+    setUserDetail({
+      name: null,
+      email: null,
+      uniqueIdentity: null,
+    });
+
+    setUser({
+      name: null,
+      email: null,
+      uniqueIdentity: null,
+    });
+
+    setUserIdFromDb(0);
+    setmsgToBot(true);
+    setPartnerDisconnected(false);
+    setIsSending(false);
+    setShowUserDetailModal(false);
+
+    // Clear typing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+
+    setIsAgentTyping(false);
+    setscrollintoView(true);
+    setshowLatestMessage(false);
+    setconnectToAgentBtn(false);
+    setpaired(false);
+    setShowMenu(false);
+
+    // Reset message count
+    messageCount.current = 0;
+    setMessageCountUI(0);
+
+    toast.success("Exited successfully");
+  };
+
+  const handleSecureExit = () => {
+    if (wsRef?.current?.readyState === WebSocket.OPEN) {
+      setshowWarningModal(true);
+      return;
+    } else {
+      setshowWarningModalForClearChat(true);
+    }
+  };
+
+  useEffect(() => {
+    const authChannel = new BroadcastChannel("auth");
+
+    authChannel.onmessage = (event) => {
+      if (event.data.type === "logout") {
+        UserLoggedOut();
+      }
+      if (event.data.type === "login") {
+        UserLoggedIn();
+      }
+    };
+
+    return () => authChannel.close();
+  }, []);
+
+  //listener for local storage changes
+  function useLocalStorageListener(callback) {
+    useEffect(() => {
+      const handleStorageChange = (event) => {
+        if (event.storageArea === localStorage) {
+          callback(event);
+        }
+      };
+
+      const handleManualLogout = () => {
+        callback({ key: "manualLogout", type: "manual" });
+      };
+      const handleManualLogin = () => {
+        callback({ key: "manualLogin", type: "manual" });
+      };
+
+      // Listen to storage changes across tabs
+      window.addEventListener("storage", handleStorageChange);
+      // Listen to custom logout events in this tab
+      window.addEventListener("manualLogout", handleManualLogout);
+      window.addEventListener("manualLogin", handleManualLogin);
+
+      return () => {
+        window.removeEventListener("storage", handleStorageChange);
+        window.removeEventListener("manualLogout", handleManualLogout);
+        window.removeEventListener("manualLogin", handleManualLogin);
+      };
+    }, [callback]);
+  }
+
+  function UserLoggedOut() {
+    // wsRef.current.close();
+    setUser({
+      name: null,
+      email: null,
+      uniqueIdentity: null,
+    });
+    setUserDetail({
+      name: null,
+      email: null,
+      uniqueIdentity: null,
+    });
+    setPartnerDisconnected(false);
+
+    setPageIndex(1);
+    setIsLoggedin(false);
+    setshowPreQuestion(false);
+
+    setMessages([
+      {
+        status: "",
+        type: "bot",
+        text: "Hello! How can I help you today?",
+        time: new Date(),
+      },
+    ]);
+    localStorage.removeItem("disconnect_time");
+    enableTabDisconnectListener();
+  }
+
+  function onYes() {
+    try {
+      const endConnection = {
+        connectionId: localStorage.getItem("connectionId"),
+        endTime: new Date().toISOString(),
+      };
+      var response = updateConnectionEndTime(endConnection);
+      if (response.data.result === 1) {
+        wsRef?.current?.close();
+      }
+    } catch (err) {
+      console.error("error in update end time", err);
+    }
+
+    /*  setLoginViaConnectionAlert(false); */
+  }
+
+  function onNo() {
+    /*  setLoginViaConnectionAlert(false); */
+  }
+
+  function UserLoggedIn() {
+    setShowUserDetailModal(false);
+    messageCount.current = 0;
+    setMessageCountUI(0);
+    if (wsRef?.current?.readyState === WebSocket?.OPEN) {
+      /* setLoginViaConnectionAlert(true); */
+      return;
+    }
+    setPageIndex(1);
+    setUser({
+      name: null,
+      email: null,
+      uniqueIdentity: null,
+    });
+    setUserDetail({
+      name: localStorage.getItem("username"),
+      email: localStorage.getItem("userEmail"),
+      uniqueIdentity: localStorage.getItem("userEmail"),
+    });
+    getPrevChatByUserEmail(localStorage?.userEmail);
+    setIsLoggedin(true);
+    setLoading(true);
+    setshowPreQuestion(false);
+    disableTabDisconnectListener();
+  }
+
+  //Handling for LOGIN LOGOUT
+  useLocalStorageListener((event) => {
+    if (localStorage?.token === undefined && event.key === "manualLogout") {
+      UserLoggedOut();
+    } else if (event.key === "manualLogin" && localStorage?.token) {
+      UserLoggedIn();
+    }
+  });
+
+  useEffect(() => {
+    const disconnectTime = localStorage.getItem("disconnect_time");
+
+    // if (disconnectTime) {
+    //   const savedTime = parseInt(disconnectTime, 10);
+    //   const elapsed = Date.now() - savedTime;
+
+    //   if (elapsed <= 2 * 60 * 1000) {
+    //     // ✅ User 2 min ke andar aaya
+    //     setPartnerDisconnected(true);
+    //   } else {
+    //     localStorage.setItem("partner_disconnected", JSON.stringify(false));
+    //     setPartnerDisconnected(false);
+    //   }
+
+    //   const timer = setTimeout(() => {
+    //     localStorage.setItem("partner_disconnected", JSON.stringify(false));
+    //     setPartnerDisconnected(false);
+    //   }, 2 * 60 * 1000);
+    // }
+
+    const container = document.querySelector(".chat-screen");
+    if (!container || !endOfMessagesRef.current) return;
+    if (isInfiniteLoading === true) {
+      container.scrollTo({
+        top: container.scrollHeight / 8.5,
+        behavior: "smooth",
+      });
+    } else if (scrollintoView === true) {
+      endOfMessagesRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+    setIsInfiniteLoading(false);
+  }, [messages, connectionId, partner_disconnected]);
+
+  useEffect(() => {
+    if (isInfiniteLoading) return;
+
+    const lastMessage = messages[messages.length - 1];
+
+    if (
+      (!scrollintoView && lastMessage.type === "Agent") ||
+      lastMessage.type === "bot"
+    ) {
+      const lastMessageId = lastMessage.text + lastMessage.time;
+
+      if (lastMessageId !== lastProcessedMessageId.current) {
+        messageCount.current++;
+        setMessageCountUI(messageCount.current);
+        lastProcessedMessageId.current = lastMessageId;
+      }
+    }
+    // Show latest message icon when user scrolls away
+    if (
+      !scrollintoView &&
+      isInfiniteLoading === false &&
+      messages.length > 10 &&
+      messageCount.current > 0 &&
+      (lastMessage.type === "Agent" || lastMessage.type === "bot")
+    ) {
+      setshowLatestMessage(true);
+    }
+  }, [messages]);
+
+  const email = localStorage.getItem("userEmail");
+  const name = localStorage.getItem("username");
+  // ✅ Start chat (assign user + save in backend)
+  const startChat = async () => {
+    setshowPreQuestion(true);
+    localStorage.setItem("partner_disconnected", JSON.stringify(false));
+    let newUser;
+    if (email && name) {
+      newUser = { name, email, uniqueIdentity: email };
+      localStorage.setItem("guestUserId", email);
+    } else if (userRandomId) {
+      newUser = { name: null, email: null, uniqueIdentity: userRandomId };
+    } else {
+      const guestId = crypto.randomUUID();
+      localStorage.setItem("guestUserId", guestId);
+      newUser = { name: null, email: null, uniqueIdentity: guestId };
+    }
+
+    setUser(newUser);
+
+    try {
+      if (!IsOnline) {
+        toast.warn("please check your internet connection");
+        return;
+      }
+      const response = await addRandomUser(newUser);
+      var result = response.data;
+      if (result.result == 1) {
+        localStorage.setItem("userIdFromDb", result.result_value.userId);
+        setUserIdFromDb(result.result_value.userId);
+
+        setUserDetail((prev) => ({
+          ...prev,
+          name: result.result_value.outName,
+          email: result.result_value.outEmail,
+        }));
+      } else {
+      }
+    } catch (err) {
+      console.error("Error adding user:", err);
+    }
+  };
+
+  const toggleChat = () => setIsOpen(true);
+  const hideChat = () => {
+    setIsOpen(false);
+    setShowMenu(false);
+  };
+
+  const sanitizeMessage = (msg) => {
+    if (!msg) return "";
+
+    return msg
+      .replace(/&/g, "&amp;") // escape &
+      .replace(/</g, "&lt;") // escape <
+      .replace(/>/g, "&gt;") // escape >
+      .replace(/"/g, "&quot;") // escape "
+      .replace(/'/g, "&#39;"); // escape '
+  };
+
+  let handleBeforeUnload;
+  let handleUnload;
+
+  function enableDisconnectListener() {
+    handleBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = ""; // show default "Leave site?" popup
+
+      // for user update  end connection time
+      try {
+        const endConnection = {
+          connectionId: localStorage.getItem("connectionId"),
+          endTime: new Date().toISOString(),
+        };
+        var response = updateConnectionEndTime(endConnection);
+        if (response.data.result === 1) {
+        }
+      } catch (err) {
+        console.error("error in update end time", err);
+      }
+    };
+
+    handleUnload = () => {
+      // Runs only when user confirms leave
+      localStorage.setItem("partner_disconnected", JSON.stringify(true));
+      localStorage.setItem("disconnect_time", Date.now());
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("unload", handleUnload);
+  }
+
+  let cleanupFn;
+
+  function enableTabDisconnectListener() {
+    function handleVisibilityChange() {
+      // if (document.visibilityState === "hidden") {
+      console.log("User left tab — mark disconnect");
+      localStorage.setItem("disconnect_time_tab", Date.now());
+      console.log("User left tab — mark disconnect localstoragec ahgnes made");
+      // } else {
+      //   console.log("User returned — clear disconnect");
+      // }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    // Return cleanup function
+    cleanupFn = () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+
+    return cleanupFn;
+  }
+
+  function disableTabDisconnectListener() {
+    if (cleanupFn) {
+      cleanupFn(); // remove listener
+      cleanupFn = null;
+      console.log("Listener disabled");
+    }
+  }
+  useEffect(() => {
+    const cleanup = enableTabDisconnectListener();
+    const token = localStorage.getItem("token");
+
+    if (token) {
+      cleanup(); // disable if token exists
+      return; // prevent returning cleanup again
+    }
+
+    return cleanup; // only return cleanup if NO token
+  }, []);
+
+  function disableDisconnectListener() {
+    window.removeEventListener("beforeunload", handleBeforeUnload);
+    window.removeEventListener("unload", handleUnload);
+
+    localStorage.setItem("partner_disconnected", JSON.stringify(false));
+    localStorage.removeItem("disconnect_time");
+  }
+
+  // Reconnect to agent in behalf of Id
+  const ReconnectToAgent = () => {
+    if (!IsOnline) {
+      toast.warn("You are Offline! please check your connection");
+      return;
+    }
+    if (wsRef.current) {
+      try {
+        wsRef.current.onopen = null;
+        wsRef.current.onmessage = null;
+        wsRef.current.onclose = null;
+        wsRef.current.onerror = null;
+
+        if (
+          wsRef.current.readyState === WebSocket.OPEN ||
+          wsRef.current.readyState === WebSocket.CONNECTING
+        ) {
+          wsRef.current.close(1000, "Reconnecting");
+        }
+      } catch (e) {
+        console.warn("WS cleanup failed", e);
+      } finally {
+        wsRef.current = null;
+      }
+    }
+    setconnectToAgentBtn(false);
+    var username =
+      localStorage.getItem("username") ||
+      localStorage.getItem("guestUserName") ||
+      "RandomUser";
+    const UserId = localStorage.getItem("userIdFromDb") || 0;
+    const UserEmailfromlocalstorage = localStorage.getItem("guestUserId");
+    // const ws = new WebSocket(`wss://tfmapi.techfeatures.ai/ws/chat?userId=${userIdFromDb}&role=User`);
+    const ws = new WebSocket(
+      `${process.env.REACT_APP_URL_FOR_WEBSOCKET}?userId=${userIdFromDb}&userEmail=${UserEmailfromlocalstorage}&role=User&userName=${username}`
+      //  `wss://localhost:7226/ws/chat?userId=${UserId}&role=User&userName= ${username}`
+    );
+
+    //  const ws = new WebSocket(`wss://localhost:7226/ws/chat?userId=${userIdFromDb}&role=User&userName= ${username}`);
+    ws.onopen = () => {
+      // 👉 Ask server to connect me with agentId
+      ws.send(
+        JSON.stringify({
+          type: "invite",
+          to: ConnectedAgent,
+        })
+      );
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+
+      if (data.type === "invite_sent") {
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "Agent",
+            text: "Invite sent, waiting for agent to accept...",
+            time: new Date(),
+          },
+        ]);
+        /*   setpaired(false); */
+      } else if (data.type === "error") {
+        let id = parseInt(localStorage.getItem("userIdFromDb"));
+        setUserIdFromDb(id);
+        setMessages((prev) => [
+          ...prev,
+          {
+            status: "connectButton",
+            type: "Agent",
+            text: "Your previous agent is offline. you can connect with new agent.",
+            time: new Date(),
+          },
+        ]);
+        let connectionid = localStorage.getItem("connectionId");
+        try {
+          const msgAgentToUser = {
+            connectionId: connectionid,
+            userId: localStorage.getItem("userIdFromDb"),
+            msg: " Your previous agent is offline. you can connect with new agent..",
+            sender: ChatRoles.Agent,
+            receiver: ChatRoles.User,
+          };
+          postUserAgentMessage(msgAgentToUser);
+        } catch (err) {}
+        ws.close();
+        setPartnerDisconnected(false);
+        let newUser;
+        if (email && name) {
+          newUser = { name, email, uniqueIdentity: email };
+          localStorage.setItem("guestUserId", email);
+        } else if (userRandomId) {
+          newUser = { name: null, email: null, uniqueIdentity: userRandomId };
+        } else {
+          const guestId = crypto.randomUUID();
+          localStorage.setItem("guestUserId", guestId);
+          newUser = { name: null, email: null, uniqueIdentity: guestId };
+        }
+
+        setUser(newUser);
+        setconnectToAgentBtn(true);
+      } else if (data.type === "paired") {
+        console.log("wsref", wsRef.current);
+
+        toast.success("Reconnected to agent successfully.");
+        setpaired(true);
+        setmsgToBot(false);
+        localStorage.removeItem("disconnect_time");
+        localStorage.setItem("partner_disconnected", JSON.stringify(false));
+        setPartnerDisconnected(false);
+        setUser((prev) => ({
+          ...prev,
+          uniqueIdentity: localStorage.getItem("guestUserId"),
+        }));
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "Agent",
+            text: "Hi! Lets Continue our discussion..",
+            time: new Date(),
+          },
+        ]);
+        enableDisconnectListener();
+        startTimer();
+        let connectionid = localStorage.getItem("connectionId");
+        try {
+          const msgAgentToUser = {
+            connectionId: connectionid,
+            userId: localStorage.getItem("userIdFromDb"),
+            msg: "Hi! Lets Continue our discussion..",
+            sender: ChatRoles.Agent,
+            receiver: ChatRoles.User,
+          };
+          postUserAgentMessage(msgAgentToUser);
+        } catch (err) {}
+      } else if (data.type === "agent-typing") {
+        // Show "Thinking..." message before calling API
+        setIsAgentTyping(true);
+      } else if (data.type === "agent-stop-typing") {
+        // Remove "Thinking..." message
+        setIsAgentTyping(false);
+      } else if (data.type === "message") {
+        setIsAgentTyping(false);
+        setalreadySeen(false);
+        setMessages((prev) => [
+          ...prev,
+          { type: "Agent", text: data.content, time: new Date() },
+        ]);
+        var connectionid = localStorage.getItem("connectionId");
+        try {
+          const msgAgentToUser = {
+            connectionId: connectionid,
+            userId: localStorage.getItem("userIdFromDb"),
+            msg: data.content,
+            sender: ChatRoles.Agent,
+            receiver: ChatRoles.User,
+          };
+          postUserAgentMessage(msgAgentToUser);
+        } catch (err) {}
+      } else if (data.type === "message_sent") {
+        setMessages((prev) =>
+          prev.filter((msg) => {
+            // 1️⃣ If it's a simple string message (bot/user text)
+            if (
+              typeof msg.messageType === "string" &&
+              msg.type === "user" &&
+              msg.messageType.includes("Seen")
+            ) {
+              msg.messageType = "Seen";
+              // return false; // remove it
+            } else {
+              msg.messageType = data.content;
+            }
+            return true;
+          })
+        );
+      } else if (data.type === "message_delivered") {
+        setMessages((prev) =>
+          prev.filter((msg) => {
+            // 1️⃣ If it's a simple string message (bot/user text)
+            if (
+              typeof msg.messageType === "string" &&
+              msg.type === "user" &&
+              msg.messageType.includes("Seen")
+            ) {
+              msg.messageType = "Seen";
+              // return false; // remove it
+            } else {
+              msg.messageType = data.content;
+            }
+            return true;
+          })
+        );
+      } else if (data.type === "seen") {
+        setMessages((prev) =>
+          prev.filter((msg) => {
+            // 1️⃣ If it's a simple string message (bot/user text)
+            if (
+              typeof msg.messageType === "string" &&
+              msg.type === "user" &&
+              msg.messageType.includes("Seen")
+            ) {
+              msg.messageType = "Seen";
+              // return false; // remove it
+            } else {
+              msg.messageType = data.content;
+            }
+            return true;
+          })
+        );
+      } else if (
+        data.type === "partner_disconnected" ||
+        data.Type === "partner_disconnected"
+      ) {
+        setpaired(false);
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "Agent",
+            text:
+              data.content ||
+              "Disconnected from agent. Attempting to reconnect…",
+            time: new Date(),
+          },
+        ]);
+        setmsgToBot(true);
+        // disableDisconnectListener();
+
+        try {
+          const endConnection = {
+            connectionId: localStorage.getItem("connectionId"),
+            endTime: new Date().toISOString(),
+          };
+          var response = updateConnectionEndTime(endConnection);
+          if (response.data.result === 1) {
+          }
+        } catch (err) {
+          console.error("error in update end time", err);
+        }
+        let connectionid = localStorage.getItem("connectionId");
+        try {
+          const msgAgentToUser = {
+            connectionId: connectionid,
+            userId: userIdFromDb,
+            msg: data.content || "Disconnect from Agent",
+            sender: ChatRoles.Agent,
+            receiver: ChatRoles.User,
+          };
+
+          postUserAgentMessage(msgAgentToUser);
+        } catch (err) {}
+        // ws.close();
+      } else if (data.type === "invite_rejected") {
+        setpaired(false);
+        setconnectToAgentBtn(false);
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "Agent",
+            text: "Request denied! Agent not available",
+            time: new Date(),
+          },
+        ]);
+        let connectionid = localStorage.getItem("connectionId");
+        try {
+          const msgAgentToUser = {
+            connectionId: connectionid,
+            userId: localStorage.getItem("userIdFromDb"),
+            msg: "Request denied! Agent not available",
+            sender: ChatRoles.Agent,
+            receiver: ChatRoles.User,
+          };
+
+          postUserAgentMessage(msgAgentToUser);
+        } catch (err) {}
+        setMessages((prev) =>
+          prev.filter((msg) => {
+            // 1️⃣ If it's a simple string message (bot/user text)
+            if (
+              typeof msg.status === "string" &&
+              msg.status.includes("connectButton")
+            ) {
+              return false; // remove it
+            }
+            return true;
+          })
+        );
+        // ws.close();
+        setPartnerDisconnected(false);
+        let newUser;
+        if (email && name) {
+          newUser = { name, email, uniqueIdentity: email };
+          localStorage.setItem("guestUserId", email);
+        } else if (userRandomId) {
+          newUser = { name: null, email: null, uniqueIdentity: userRandomId };
+        } else {
+          const guestId = crypto.randomUUID();
+          localStorage.setItem("guestUserId", guestId);
+          newUser = { name: null, email: null, uniqueIdentity: guestId };
+        }
+
+        setUser(newUser);
+      } else if (
+        data.type === "end_conversation" ||
+        data.Type === "end_conversation"
+      ) {
+        setpaired(false);
+        setmsgToBot(true);
+        disableDisconnectListener();
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "Agent",
+            text: data.content || data.Content,
+            time: new Date(),
+          },
+        ]);
+        try {
+          const endConnection = {
+            connectionId: localStorage.getItem("connectionId"),
+            endTime: new Date().toISOString(),
+          };
+          var response = updateConnectionEndTime(endConnection);
+          if (response.data.result === 1) {
+          }
+        } catch (err) {
+          console.error("error in update end time", err);
+        }
+        let connectionid = localStorage.getItem("connectionId");
+        try {
+          const msgAgentToUser = {
+            connectionId: connectionid,
+            userId: localStorage.getItem("userIdFromDb"),
+            msg: data.content,
+            sender: ChatRoles.Agent,
+            receiver: ChatRoles.User,
+          };
+
+          postUserAgentMessage(msgAgentToUser);
+        } catch (err) {}
+        ws.close();
+      }
+    };
+
+    ws.onclose = () => {
+      setpaired(false);
+      disableDisconnectListener();
+      stopTimmer();
+      {
+        connectionId &&
+          setMessages((prev) => [
+            ...prev,
+            { type: "Agent", text: "Connection closed", time: new Date() },
+          ]);
+      }
+      let connectionid = localStorage.getItem("connectionId");
+      try {
+        const msgAgentToUser = {
+          connectionId: connectionid,
+          userId: localStorage.getItem("userIdFromDb"),
+          msg: "Connection closed",
+          sender: ChatRoles.Agent,
+          receiver: ChatRoles.User,
+        };
+
+        postUserAgentMessage(msgAgentToUser);
+      } catch (err) {}
+    };
+    wsRef.current = ws;
+  };
+  // connnect with agent  in behalf of Role
+  useEffect(() => {
+    setIsLoggedin(localStorage?.token ? true : false);
+    let t = localStorage.getItem(localStorage.getItem("userIdFromDb"));
+    setUserIdFromDb(t);
+  }, []);
+
+  const connectToAgent = async () => {
+    if (
+      userDetail.email &&
+      VailidateEmail.test(userDetail.email) &&
+      userDetail.name
+    ) {
+      // connectToAgent();
+    } else if (
+      VailidateEmail.test(localStorage.getItem("guestUserId")) &&
+      ValidateName.test(localStorage.getItem("guestUserName"))
+    ) {
+      // connectToAgent();
+    } else if (
+      localStorage.getItem("userEmail") &&
+      localStorage.getItem("username") &&
+      isLoggedIN
+    ) {
+      try {
+        var payload = {
+          uniqueIdentity: localStorage.getItem("guestUserId"),
+          name: localStorage.getItem("username"),
+          email: localStorage.getItem("userEmail"),
+        };
+
+        var response = await updateUserNameorEmail(payload);
+
+        if (response.data.result === 1) {
+          localStorage.setItem("guestUserId", response.data.result_value.email);
+
+          // connectToAgent();
+        }
+      } catch (error) {
+        setShowUserDetailModal(true);
+        setconnectToAgentBtn(false);
+        hideChat();
+        return;
+      }
+    } else {
+      setShowUserDetailModal(true);
+      setconnectToAgentBtn(false);
+      return;
+      // hideChat();
+    }
+
+    if (!IsOnline) {
+      toast.warn("You are Offline! please check your connection");
+      return;
+    }
+    // connecting to websocket
+    var username =
+      localStorage.getItem("username") ||
+      localStorage.getItem("guestUserName") ||
+      "RandomUser";
+    if (!username) {
+      return toast.warning("Please login or provide email to connect");
+    }
+
+    const UserEmailfromlocalstorage = localStorage.getItem("guestUserId");
+    const UserId = localStorage.getItem("userIdFromDb") || 0;
+
+    const ws = new WebSocket(
+      `${process.env.REACT_APP_URL_FOR_WEBSOCKET}?userId=${userIdFromDb}&userEmail=${UserEmailfromlocalstorage}&role=User&userName=${username}`
+      // `wss://localhost:7226/ws/chat?userId=${userIdFromDb}&role=User&userName= ${username}`
+    );
+    //  const ws = new WebSocket(`wss://localhost:7226/ws/chat?userId=${userIdFromDb}&role=User&userName= ${username}`);
+    ws.onopen = () => {
+      // 👉 Ask server to connect me with agentId
+      ws.send(
+        JSON.stringify({
+          type: "invite",
+          to: "Agent",
+        })
+      );
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+
+      if (data.type === "invite_sent") {
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "Agent",
+            text: "Invite sent, waiting for agent to accept...",
+            time: new Date(),
+          },
+        ]);
+        setconnectToAgentBtn(false);
+      } else if (data.type === "no_agent_available") {
+        setconnectToAgentBtn(false);
+        setpaired(false);
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "Agent",
+            text: "No agents are currently available. Please try again later.",
+            time: new Date(),
+          },
+        ]);
+        setMessages((prev) =>
+          prev.filter((msg) => {
+            // 1️⃣ If it's a simple string message (bot/user text)
+            if (
+              typeof msg.status === "string" &&
+              msg.status.includes("connectButton")
+            ) {
+              return false; // remove it
+            }
+            return true;
+          })
+        );
+
+        ws.close();
+      } else if (data.type === "paired") {
+        setmsgToBot(false);
+        setpaired(true);
+        setMessages((prev) =>
+          prev.filter((msg) => {
+            // 1️⃣ If it's a simple string message (bot/user text)
+            if (
+              typeof msg.status === "string" &&
+              msg.status.includes("connectButton")
+            ) {
+              return false; // remove it
+            }
+
+            // 2️⃣ If it's a React element (content JSX like your botReply)
+            /* if (
+              typeof msg.content === "object" &&
+              msg.content?.props?.children &&
+              msg.content.props.children
+                .toString()
+                .includes("Please Connect to Customer Service")
+            ) {
+              return false; // remove it
+            } */
+
+            // 3️⃣ Otherwise keep the message
+            return true;
+          })
+        );
+
+        // insert connection detail
+        try {
+          const connectionDetail = {
+            connectionId: data.connectionId,
+            userId: Number(data.to),
+            agentId: Number(data.content),
+            agentName: data.userName,
+          };
+          insertConnectionDetail(connectionDetail)
+            .then((response) => {
+              if (response.data.result === 1) {
+                localStorage.setItem(
+                  "connectionId",
+                  response.data.result_value.generatedConnectionId
+                );
+
+                const saveconnectionId = {
+                  questionId: localStorage.getItem("insertedQId"),
+                  connectionId: Number(
+                    response.data.result_value.generatedConnectionId
+                  ),
+                };
+
+                // alert("connection id" + response.data.result_value.generatedConnectionId);
+                insertUnAnsweredQuestionId(saveconnectionId)
+                  .then((response) => {
+                    if (response.data.result === 1) {
+                    }
+                  })
+                  .catch((error) => {
+                    console.error("Error inserting UnanswerQuestionId", error);
+                  });
+              }
+            })
+            .catch((error) => {
+              console.error("Error inserting connection detail", error);
+            });
+        } catch (err) {
+          console.error("error from db", err);
+        }
+
+        localStorage.setItem("ConnectedAgent", data.content);
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "Agent",
+            text: " Hi there! I’m your support agent. How can I assist you today?",
+            time: new Date(),
+          },
+        ]);
+        let connectionid = localStorage.getItem("connectionId");
+        try {
+          const msgAgentToUser = {
+            connectionId: connectionid,
+            userId: userIdFromDb,
+            msg: " Hi there! I’m your support agent. How can I assist you today?",
+            sender: ChatRoles.Agent,
+            receiver: ChatRoles.User,
+          };
+
+          postUserAgentMessage(msgAgentToUser);
+        } catch (err) {
+          console.error(err);
+        }
+        setPartnerDisconnected(false);
+        enableDisconnectListener();
+        startTimer();
+        setconnectToAgentBtn(false);
+      } else if (data.type === "message") {
+        setIsAgentTyping(false);
+        setalreadySeen(false);
+        setMessages((prev) => [
+          ...prev,
+          { type: "Agent", text: data.content, time: new Date() },
+        ]);
+        var connectionid = localStorage.getItem("connectionId");
+        try {
+          const msgAgentToUser = {
+            connectionId: connectionid,
+            userId: userIdFromDb,
+            msg: data.content,
+            sender: ChatRoles.Agent,
+            receiver: ChatRoles.User,
+          };
+          postUserAgentMessage(msgAgentToUser);
+        } catch (err) {}
+      } else if (data.type === "message_sent") {
+        setMessages((prev) =>
+          prev.filter((msg) => {
+            // 1️⃣ If it's a simple string message (bot/user text)
+            if (
+              typeof msg.messageType === "string" &&
+              msg.type === "user" &&
+              msg.messageType.includes("Seen")
+            ) {
+              msg.messageType = "Seen";
+              // return false; // remove it
+            } else {
+              msg.messageType = data.content;
+            }
+            return true;
+          })
+        );
+      } else if (data.type === "message_delivered") {
+        setMessages((prev) =>
+          prev.filter((msg) => {
+            // 1️⃣ If it's a simple string message (bot/user text)
+            if (
+              typeof msg.messageType === "string" &&
+              msg.type === "user" &&
+              msg.messageType.includes("Seen")
+            ) {
+              msg.messageType = "Seen";
+              // return false; // remove it
+            } else {
+              msg.messageType = data.content;
+            }
+            return true;
+          })
+        );
+      } else if (data.type === "seen") {
+        setMessages((prev) =>
+          prev.filter((msg) => {
+            // 1️⃣ If it's a simple string message (bot/user text)
+            if (
+              typeof msg.messageType === "string" &&
+              msg.type === "user" &&
+              msg.messageType.includes("Seen")
+            ) {
+              msg.messageType = "Seen";
+              // return false; // remove it
+            } else {
+              msg.messageType = data.content;
+            }
+            return true;
+          })
+        );
+      } else if (
+        data.type === "partner_disconnected" ||
+        data.Type === "partner_disconnected"
+      ) {
+        setpaired(false);
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "Agent",
+            text:
+              data.content ||
+              "Disconnected from agent. Attempting to reconnect…",
+            time: new Date(),
+          },
+        ]);
+        setmsgToBot(true);
+        // ws.close();
+        // disableDisconnectListener();
+
+        try {
+          const endConnection = {
+            connectionId: localStorage.getItem("connectionId"),
+            endTime: new Date().toISOString(),
+          };
+          var response = updateConnectionEndTime(endConnection);
+          if (response.data.result === 1) {
+          }
+        } catch (err) {
+          console.error("error in update end time", err);
+        }
+        let connectionid = localStorage.getItem("connectionId");
+        try {
+          const msgAgentToUser = {
+            connectionId: connectionid,
+            userId: userIdFromDb,
+            msg: data.content || "Disconnect from Agent",
+            sender: ChatRoles.Agent,
+            receiver: ChatRoles.User,
+          };
+
+          postUserAgentMessage(msgAgentToUser);
+        } catch (err) {}
+      } else if (data.type === "agent-typing") {
+        // Show "Thinking..." message before calling API
+        setIsAgentTyping(true);
+      } else if (data.type === "agent-stop-typing") {
+        // Remove "Thinking..." message
+        setIsAgentTyping(false);
+      } else if (data.type === "invite_rejected") {
+        setpaired(false);
+        setconnectToAgentBtn(false);
+        setMessages((prev) =>
+          prev.filter((msg) => {
+            // 1️⃣ If it's a simple string message (bot/user text)
+            if (
+              typeof msg.status === "string" &&
+              msg.status.includes("connectButton")
+            ) {
+              return false; // remove it
+            }
+            return true;
+          })
+        );
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "Agent",
+            text: "Agent may be busy with someone try again later",
+            time: new Date(),
+          },
+        ]);
+        let connectionid = localStorage.getItem("connectionId");
+        try {
+          const msgAgentToUser = {
+            connectionId: connectionid,
+            userId: userIdFromDb,
+            msg: "Agent may be busy with someone try again later",
+            sender: ChatRoles.Agent,
+            receiver: ChatRoles.User,
+          };
+
+          postUserAgentMessage(msgAgentToUser);
+        } catch (err) {}
+        // ws.close();
+      } else if (
+        data.type === "end_conversation" ||
+        data.Type === "end_conversation"
+      ) {
+        setpaired(false);
+        setmsgToBot(true);
+        setIsAgentTyping(false);
+        disableDisconnectListener();
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "Agent",
+            text: data.content || data.Content,
+            time: new Date(),
+          },
+        ]);
+
+        try {
+          const endConnection = {
+            connectionId: localStorage.getItem("connectionId"),
+            endTime: new Date().toISOString(),
+          };
+          var response = updateConnectionEndTime(endConnection);
+          if (response.data.result === 1) {
+          }
+        } catch (err) {
+          console.error("error in update end time", err);
+        }
+        let connectionid = localStorage.getItem("connectionId");
+        try {
+          const msgAgentToUser = {
+            connectionId: connectionid,
+            userId: userIdFromDb,
+            msg: data.content,
+            sender: ChatRoles.Agent,
+            receiver: ChatRoles.User,
+          };
+
+          postUserAgentMessage(msgAgentToUser);
+        } catch (err) {}
+        ws.close();
+      }
+    };
+
+    ws.onclose = () => {
+      setpaired(false);
+      setmsgToBot(true);
+      setIsAgentTyping(false);
+      disableDisconnectListener();
+      stopTimmer();
+      {
+        connectionId &&
+          setMessages((prev) => [
+            ...prev,
+            { type: "Agent", text: "Connection closed", time: new Date() },
+          ]);
+      }
+      let connectionid = localStorage.getItem("connectionId");
+      if (connectionid) {
+        try {
+          const msgAgentToUser = {
+            connectionId: connectionid,
+            userId: userIdFromDb,
+            msg: "Connection closed",
+            sender: ChatRoles.Agent,
+            receiver: ChatRoles.User,
+          };
+
+          postUserAgentMessage(msgAgentToUser);
+        } catch (err) {}
+      } else {
+        const data = {
+          userId: localStorage.getItem("userIdFromDb") || userIdFromDb,
+          msg: "no agent available. Connection closed",
+          senderChatRoleId: ChatRoles.Bot,
+          receiverChatRoleId: ChatRoles.User,
+        };
+        postChatMessage(data);
+      }
+    };
+    wsRef.current = ws; //WebSocket connection ko persistent (yaani memory me zinda)
+    // here we have to change
+  };
+
+  const handleChange1 = (e) => {
+    var name = e.target.value;
+    setUserDetail((prev) => ({
+      ...prev,
+      name: name,
+    }));
+  };
+useEffect(() => {
+    const IsvalidEmail = localStorage.getItem("guestUserId") || null;
+    const disconnectTime = localStorage.getItem("disconnect_time");
+    const disconnectTimeTab = localStorage.getItem("disconnect_time_tab");
+    const savedTimeTab = parseInt(disconnectTimeTab, 10);
+    const elapsedTab = Date.now() - savedTimeTab;
+    const savedTime = parseInt(disconnectTime, 10);
+    const elapsed = Date.now() - savedTime;
+    const login_method = localStorage.getItem("login_method");
+    if (elapsed <= 1 * 8 * 1000) {
+      // ✔ if user comes under 8 sec
+      ReconnectToAgent();
+    } else if (
+      //if user closes tab and comes after 10 mins
+      (login_method === "guest" && elapsedTab > 1 * 10 * 60 * 1000) ||
+      (IsvalidEmail &&
+        !ValidateName.test(localStorage.getItem("guestUserId")) &&
+        elapsedTab > 1 * 10 * 60 * 1000)
+    ) {
+     performClearSession();
+    }
+  }, []);
+
+  const handleChange2 = (e) => {
+    var email = e.target.value;
+    setUserDetail((prev) => ({
+      ...prev,
+      email: email,
+    }));
+  };
+
+  const submitUserDetail = async () => {
+    try {
+      if (
+        VailidateEmail.test(userDetail.email) == false ||
+        ValidateName.test(userDetail.name) == false
+      ) {
+        toast.error("Please enter valid information.");
+        return;
+      }
+      if (!userDetail.name || !userDetail.email) {
+        toast.error("Please make sure all fields are filled in correctly.");
+        return;
+      } else {
+        var payload = {
+          uniqueIdentity: localStorage.getItem("guestUserId"),
+          name: userDetail.name,
+          email: userDetail.email,
+        };
+        localStorage.setItem("guestUserName", userDetail.name);
+        localStorage.setItem("login_method", "guest");
+ 
+        var response = await updateUserNameorEmail(payload);
+        if (response.data.result === 1) {
+          toast.success("Your details have been saved successfully.");
+          localStorage.setItem("guestUserId", response.data.result_value.email);
+          setPageIndex(1);
+          await getPrevChatByUserEmail(response.data.result_value.email);
+        }
+        connectToAgent();
+        setShowUserDetailModal(false);
+        document.body.style.overflow = "auto";
+        toggleChat();
+      }
+    } catch (err) {
+      console.error("Error updating user details:", err);
+    }
+  };
+
+  const ThinkingDots = () => {
+    return (
+      <div>
+        <div className="thinking-dots">
+          <p></p>
+          <p></p>
+          <p></p>
+        </div>
+      </div>
+    );
+  };
+
+  const TypingDots = () => {
+    return (
+      <div>
+        <div className="thinking-dots">
+          <p></p>
+          <p></p>
+          <p></p>
+        </div>
+      </div>
+    );
+  };
+
+  // ✅ Send message
+  const handleSubmit = async (e, preQuestion) => {
+    const textarea = document.querySelector(".text-box");
+    if (textarea) {
+      textarea.style.height = "auto";
+    }
+    if (showUserDetailModal) {
+      submitUserDetail();
+      return;
+    }
+    if (
+      wsRef.current &&
+      wsRef.current.readyState === WebSocket.OPEN &&
+      paired === false
+    ) {
+      toast.warning("Please wait… Connecting you to an agent.");
+      return;
+    }
+    if (e && e.preventDefault) {
+      e.preventDefault();
+    }
+
+    const messageText = preQuestion || input;
+
+    if (!messageText.trim()) return;
+    if (!IsOnline) {
+      toast.warn(" You are offline. Please check your internet connection.");
+
+      return; // ✅ STOP completely - no user message added
+    }
+    setshowPreQuestion(false);
+
+    // scroll the page in latest message on this function
+    setscrollintoView(true);
+    if (
+      messageText.length >
+      (msgTOBot ? MAX_MESSAGE_TO_BOT_LENGTH : MAX_MESSAGE_TO_AGENT_LENGTH)
+    ) {
+      toast.warning(
+        `Message too long! Max ${
+          msgTOBot ? MAX_MESSAGE_TO_BOT_LENGTH : MAX_MESSAGE_TO_AGENT_LENGTH
+        } characters.`
+      );
+      return;
+    }
+    let userMsg = {};
+    if (
+      wsRef.current &&
+      wsRef.current.readyState === WebSocket.OPEN &&
+      paired === true
+    ) {
+      userMsg = { type: "user", text: messageText, time: new Date() };
+    } else {
+      userMsg = {
+        type: "user",
+        text: messageText,
+        time: new Date(),
+        messageType: "Seen",
+      };
+    }
+    setMessages((prev) => [...prev, userMsg]);
+    //  setMessages((prev) =>
+    //       prev.filter((msg) => {
+    //         // 1️⃣ If it's a simple string message (bot/user text)
+    //         if (
+    //           typeof msg.messageType === "string" &&
+    //           msg.type === "user"&&
+    //           msg.messageType===""
+    //         ) {
+    //           msg.messageType = "Seen";
+    //           // return false; // remove it
+    //         }
+    //         else if( typeof msg.messageType === "string" &&
+    //           msg.type === "Agent"||
+    //         msg.type === "bot"){
+    //          return;
+    //         }
+    //         return true;
+    //       })
+    //     );
+    setInput("");
+
+    if (
+      wsRef.current &&
+      wsRef.current.readyState === WebSocket.OPEN &&
+      paired === true
+    ) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "message",
+          content: messageText,
+        })
+      );
+
+      try {
+        const msgUserToAgent = {
+          connectionId: localStorage.getItem("connectionId"),
+          userId: userIdFromDb || localStorage.getItem("userIdFromDb"),
+          msg: messageText,
+          sender: ChatRoles.User,
+          receiver: ChatRoles.Agent,
+        };
+        await postUserAgentMessage(msgUserToAgent);
+      } catch (err) {}
+      resetTimer();
+    } else {
+      setIsSending(true);
+      // Save user-bot chat  to backend
+      const data = {
+        userId: localStorage.getItem("userIdFromDb") || userIdFromDb,
+        msg: messageText,
+        senderChatRoleId: ChatRoles.User,
+        receiverChatRoleId: ChatRoles.Bot,
+      };
+      await postChatMessage(data);
+
+      try {
+        // Show "Thinking..." message before calling API
+        setMessages((prev) => [
+          ...prev,
+          { type: "Thinking_Bot", text: <ThinkingDots />, time: new Date() },
+        ]);
+
+        // Fetch bot response
+        const response = await searchQA("CustomAi", messageText);
+
+        if (
+          response?.result?.human_like_answer.trim() == "0" ||
+          response?.error != null
+        ) {
+          // Save bot reply to backend
+          const dataForBot = {
+            userId: localStorage.getItem("userIdFromDb") || userIdFromDb,
+            msg: "Bot Failed to answer, needs agent support.",
+            senderChatRoleId: ChatRoles.Bot,
+            receiverChatRoleId: ChatRoles.User,
+          };
+          await postChatMessage(dataForBot);
+
+          // now integration for save un answer question to DB
+          const unansweredQuestion = {
+            userId: localStorage.getItem("userIdFromDb") || userIdFromDb,
+            question: messageText,
+          };
+
+          var response2 = await postUnansweredQuestion(unansweredQuestion);
+          if (response2 && response2.result === 1) {
+            localStorage.setItem(
+              "insertedQId",
+              response2.result_value.insertedQId
+            );
+          }
+
+          const botReply = {
+            status: "connectButton",
+            type: "bot",
+            text: "I am unable to answer this question you can connect with expert for more detailed information",
+            time: new Date(),
+          };
+
+          setconnectToAgentBtn(true);
+          setMessages((prev) => {
+            const updated = [...prev];
+            // replace last message (Thinking...) with real reply
+            updated[updated.length - 1] = botReply;
+            return updated;
+          });
+          //  setMessages(prev => prev.filter((_, index) => index !== prev.length - 1));
+
+          return;
+        }
+
+        // Normal bot reply
+        const botReply = {
+          type: "bot",
+          text: response.result.human_like_answer,
+          time: new Date(),
+        };
+        // setMessages((prev) => [...prev, botReply]);
+        setMessages((prev) => {
+          const updated = [...prev];
+          // replace last message (Thinking...) with real reply
+          updated[updated.length - 1] = botReply;
+          return updated;
+        });
+        // setMessages((prev) => {
+        //   const updated = [...prev];
+        //   // replace last message (Thinking...) with real reply
+        //   updated[updated.length - 1] = botReply;
+        //   return updated;
+        // });
+
+        // Save bot reply to backend
+        const dataForBot = {
+          userId: localStorage.getItem("userIdFromDb") || userIdFromDb,
+          msg: response.result.human_like_answer,
+          senderChatRoleId: ChatRoles.Bot,
+          receiverChatRoleId: ChatRoles.User,
+        };
+        await postChatMessage(dataForBot);
+      } catch (err) {
+        console.error("Error in bot response handling:", err);
+        const dataForBot = {
+          userId: localStorage.getItem("userIdFromDb") || userIdFromDb,
+          msg: "Something went wrong please try again later.",
+          senderChatRoleId: ChatRoles.Bot,
+          receiverChatRoleId: ChatRoles.User,
+        };
+        await postChatMessage(dataForBot);
+
+        // now integration for save un answer question to DB
+
+        const unansweredQuestion = {
+          userId: localStorage.getItem("userIdFromDb") || userIdFromDb,
+          question: messageText,
+        };
+        var response2 = await postUnansweredQuestion(unansweredQuestion);
+
+        if (response2 && response2.result === 1) {
+          localStorage.setItem(
+            "insertedQId",
+            response2.result_value.insertedQId
+          );
+        }
+
+        //  setShowUserDetailModal(true);
+        //  hideChat();
+
+        // ✅ Show connect button when online AND (network error OR server error)
+        if (
+          IsOnline === true &&
+          err
+          //  &&
+          // (err.error === "NETWORK_ERROR" ||
+          //   err.error === "SERVER_ERROR" ||
+          //   err.error === "SERVICE_UNAVAILABLE" ||
+          //   err.error === "ECONNABORTED" ||
+          //   err.status === 500 ||
+          //   err.status === 502 ||
+          //   err.status === 503 ||
+          //   err.status === 504)
+        ) {
+          const botReply = {
+            status: "connectButton",
+            type: "bot",
+            text: "I am unable to answer this question you can connect with expert for more detailed information",
+            time: new Date(),
+          };
+
+          setMessages((prev) => {
+            const updated = [...prev];
+            // replace last message (Thinking...) with real reply
+            updated[updated.length - 1] = botReply;
+            return updated;
+          });
+          setconnectToAgentBtn(true);
+          //  setMessages(prev => prev.filter((_, index) => index !== prev.length - 1));
+        } else {
+          const botReply = {
+            status: "connectButton",
+            type: "bot",
+            text: "Something went wrong please try again later...",
+            time: new Date(),
+          };
+
+          setMessages((prev) => {
+            const updated = [...prev];
+            // replace last message (Thinking...) with real reply
+            updated[updated.length - 1] = botReply;
+            return updated;
+          });
+        }
+      } finally {
+        setIsSending(false); // ✅ always re-enable send button
+      }
+    }
+    // notifyOtherTabs();
+  };
+
+  // ✅ Handle double tap (mobile)
+  const handleDoubleTap = () => {
+    const now = Date.now();
+    const gap = now - lastTap;
+    if (gap < 300 && gap > 0) {
+      // optional: enable dragging if needed
+    }
+    setLastTap(now);
+  };
+
+  const handleDrag = (e, data) => setPosition({ x: data.x, y: data.y });
+  const mapChatData = (apiResponse) => {
+    if (!apiResponse?.result_value) return [];
+
+    // STEP 1: convert each item
+    const mapped = apiResponse.result_value.map((item) => {
+      let type = "";
+      switch (item.senderChatRoleId) {
+        case 3:
+          type = "bot";
+          break;
+        case 2:
+          type = "user";
+          break;
+        case 1:
+          type = "Agent";
+          break;
+        default:
+          type = "unknown";
+      }
+
+      return {
+        status: "",
+        type,
+        text: item.sendedMessage || "",
+        time: item.sendedAt, // important for sorting
+      };
+    });
+
+    // STEP 2: sort before returning (old → new)
+    return mapped.sort((a, b) => new Date(a.time) - new Date(b.time));
+  };
+
+  const getPrevChatByUserEmail = async (Email = "") => {
+    const email = Email || localStorage.getItem("userEmail") || userRandomId;
+    try {
+      if (email) {
+        const payload = {
+          UserEmail: email,
+          PageSize: PageSize,
+          PageIndex: pageIndex,
+        };
+        const response = await getPrevChatByUserId(payload);
+
+        if (response.result === -1) {
+          setLoading(false);
+          return;
+        } else {
+          var data = mapChatData(response);
+          // Process data: Set messageType to "Seen" ONLY for user messages from previous chats
+          // BUT keep the original messageType for current/active chat
+          const processedData = data.map((msg) => {
+            // If it's a user message from previous chat and doesn't have a messageType
+            if (
+              msg.type === "user" &&
+              (msg.messageType === "" || !msg.messageType)
+            ) {
+              return {
+                ...msg,
+                messageType: "Seen", // Set to Seen for previous chat messages
+              };
+            }
+            // For other messages OR messages that already have a status, keep as is
+            return msg;
+          });
+
+          if (pageIndex == 1) {
+            setMessages([...processedData]);
+          } else {
+            // For pagination: add new messages at the beginning
+            setMessages((prev) => [...processedData, ...prev]);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error fetching previous chats:", err);
+      // throw err;
+    } finally {
+    }
+  };
+
+  useEffect(() => {
+    if (loading) {
+      getPrevChatByUserEmail();
+    }
+  }, [pageIndex]);
+
+  // Start / Restart timer
+  const startTimer = () => {
+    // Clear old timer
+    if (intervalRef.current) clearInterval(intervalRef.current);
+
+    // Start new timer
+    intervalRef.current = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(intervalRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  // Reset timer back to 2 minutes
+  const resetTimer = () => {
+    setTimeLeft(120); // reset to 2 minutes
+    startTimer(); // restart countdown
+  };
+
+  // Stop Timmer
+
+  const stopTimmer = () => {
+    setTimeLeft(120); // reset to 2 minutes
+    clearInterval(intervalRef.current);
+  };
+  // Start timer on first load
+  useEffect(() => {
+    return () => clearInterval(intervalRef.current);
+  }, []);
+
+  // Convert seconds → mm:ss
+  // const minutes = Math.floor(timeLeft / 60);
+  // const seconds = timeLeft % 60;
+
+  // const handleUserInput = (e) => {
+  //   setInput(e.target.value);
+  //   if (wsRef?.current?.readyState === WebSocket?.OPEN) {
+  //     wsRef.current.send(
+  //       JSON.stringify({
+  //         type: "user-typing",
+  //         to: ConnectedAgent,
+  //       })
+  //     );
+  //   }
+
+  // };
+
+  // const logoutUser = async () => {
+  //   if (
+  //     wsRef?.current?.readyState === WebSocket?.OPEN &&
+  //     localStorage.getItem("connectionId") != null
+  //   ) {
+  //     try {
+  //       const endConnection = {
+  //         connectionId: localStorage.getItem("connectionId"),
+  //         endTime: new Date().toISOString(),
+  //       };
+  //       var response = await updateConnectionEndTime(endConnection);
+  //       if (response.data.result === 1) {
+  //         console.log("insert endconnection time", response);
+  //         wsRef?.current?.close();
+  //         handleSubmit();
+  //       }
+  //     } catch (err) {
+  //       console.error("error in update end time", err);
+  //     }
+  //   } else if (
+  //     wsRef?.current?.readyState === WebSocket?.OPEN &&
+  //     localStorage.getItem("connectionId") == null
+  //   ) {
+  //     wsRef?.current?.close();
+  //   }
+  //   localStorage.clear();
+  //   // Trigger custom event for this tab
+  //   window.dispatchEvent(new Event("manualLogout"));
+  //   authChannel.postMessage({ type: "logout" });
+  //   setIsLoggedin(false);
+  //   navigate("/blog");
+  // };
+
+  const handleUserInput = (e) => {
+    const textarea = e.target;
+    const value = e.target.value.replace(/^\s+/, "");
+    setInput(value);
+
+    // Reset height so shrink works
+    textarea.style.height = "auto";
+
+    const lineHeight = 22; // must match CSS
+    const maxLines = 4;
+    const maxHeight = lineHeight * maxLines;
+
+    textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + "px";
+    // --- Send "typing" when user types ---
+    if (wsRef?.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "user-typing",
+          to: ConnectedAgent,
+          isTyping: true,
+        })
+      );
+    }
+
+    // --- Clear previous timer ---
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    // --- Set new timer for "stop typing" ---
+    typingTimeoutRef.current = setTimeout(() => {
+      if (wsRef?.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "user-stop-typing",
+          })
+        );
+      }
+    }, 3000); // 1 second after no typing -> stop typing
+  };
+
+  const handleScroll = () => {
+    if (messages.length < 10) {
+      return;
+    }
+    const container = document.querySelector(".chat-screen");
+    let total = container.scrollHeight - container.clientHeight;
+    if (container.scrollTop <= total * 0.8) {
+      setscrollintoView(false);
+      setshowLatestMessage(true);
+    } else if (container.scrollTop >= total * 0.7) {
+      setscrollintoView(true);
+      setshowLatestMessage(false);
+      messageCount.current = 0;
+      setMessageCountUI(0);
+    }
+  };
+  const firstRenderRef = useRef(true);
+
+  useEffect(() => {
+    if (firstRenderRef.current && endOfMessagesRef.current) {
+      firstRenderRef.current = false;
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          endOfMessagesRef.current?.scrollIntoView({ behavior: "smooth" });
+        });
+      });
+    }
+  }, [messages]);
+  if (
+    scrollintoView === true &&
+    wsRef.current &&
+    wsRef.current.readyState === WebSocket.OPEN &&
+    paired === true &&
+    alreadySeen === false &&
+    document.visibilityState === "visible" &&
+    isOpen === true
+  ) {
+    wsRef.current.send(
+      JSON.stringify({
+        type: "seen",
+      })
+    );
+    setalreadySeen(true);
+  }
+  return (
+    <>
+      <div className="chatbot-container">
+        <div className="chat-button" onClick={toggleChat}>
+          <div className="chatbot_tooltip_msg">
+            <div className="chatbot_border">
+              <h4 className="chatbot_msg">Ai assistant</h4>
+            </div>
+          </div>
+          <div className="chat-bot-wave"></div>
+          <div className="chat-bot-cricle">
+            <img
+              src={require("../../../assets/logos/shirnk-logo.png")}
+              alt="ai_robot"
+              className="chatbot_img"
+            />
+          </div>
+        </div>
+
+        {/* <Draggable
+          axis="x"
+          position={position}
+          // onDrag={handleDrag}
+          // nodeRef={nodeRef}
+        > */}
+        <div>
+          <div
+            className={`chat-window ${isOpen ? "open-chat-window" : ""}`}
+            onClick={handleDoubleTap}
+            onTouchEnd={handleDoubleTap}
+          >
+            <div className="chat-header">
+              <div className="chatbot_dots_icon">
+                {/* {showMenu && (
+                  <div className="chatbot_dropdown_menu">
+                    <div
+                      className="dropdown_item"
+                      onClick={() => {
+                        isLoggedIN ? handleLogout() : clearChatSession();
+                        setShowMenu(false);
+                      }}
+                    >
+                      {isLoggedIN ? "logout for clear chat" : "Clear Session"}
+                    </div>
+                  </div>
+                )}  */}
+
+                <div className="tooltip-wrapper">
+                  <i
+                    className="bi bi-three-dots-vertical"
+                    onClick={handleSecureExit}
+                  ></i>
+                  <div className="tooltip-box">
+                    {isLoggedIN ? "Secure & Exit" : "Secure & Exit"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="d-flex align-items-center">
+                <img
+                  src={require("../../../assets/logos/shirnk-logo.png")}
+                  alt="Tech Features"
+                  className="tech_bot_logo"
+                />
+                <div className="bot-heading">
+                  <span>Tech AI Bot</span>
+                  <p>Beta</p>
+                </div>
+              </div>
+              <div className="chatbot_cross_dot_wraper">
+                <div className="chatbot_close_icon" onClick={hideChat}>
+                  <img
+                    src={require("../../../assets/icons/close.png")}
+                    alt="Close"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* ChatBot Starting Screen */}
+            {!user.uniqueIdentity && !partner_disconnected ? (
+              <div className="chat-msg-wraper chat-starting-screen d-flex justify-content-center align-items-center">
+                <div className="chat-bot-start-screen">
+                  <h2>Welcome to Tech AI Bot ! </h2>
+                  <p>
+                    I‘m here to help you with your questions. Ask me anything
+                    about our services, Portfolios, or how to get started.
+                  </p>
+                  <button
+                    type="submit"
+                    onClick={() => {
+                      startChat();
+                      setshowPreQuestion(true);
+                    }}
+                    className="start-new-chat-btn"
+                  >
+                    <img src={messageSvg} alt="Message" />
+                    Start a New Chat
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {/* ChatBot Starting Screen end */}
+
+            {/* Chatbot Pre-question Screen */}
+            {showPreQuestion ? (
+              <>
+                <div className=" chat-question-screen d-flex justify-content-center align-items-center">
+                  <div className="chat-bot-start-screen">
+                    {/* <h2>Welcome to Tech AI Bot !</h2>
+                <p>I‘m here to help you with your questions. Ask me anything about our services, Portfolios, or how to get started.</p> */}
+
+                    {preMessages.map((preMessage, index) => (
+                      <div
+                        key={index}
+                        className="chat-questions-box"
+                        onClick={() => {
+                          if (!isSending) {
+                            setshowPreQuestion(false);
+                            handleSubmit(null, preMessage.text);
+                          }
+                        }}
+                      >
+                        <span>{preMessage.text}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : null}
+            {/* Chatbot Pre-question Screen end */}
+
+            {/* ChatBot Chat Screen */}
+            {user.uniqueIdentity &&
+            !partner_disconnected &&
+            !showPreQuestion ? (
+              <div
+                className="chat-msg-wraper chat-screen"
+                onScroll={handleScroll}
+              >
+                <div className="chat_msg_input_Wraper">
+                  <div className="chat-messages">
+                    <div className="chat-message-inner-box">
+                      {messages.map((msg, idx) => (
+                        <div
+                          key={idx}
+                          ref={isOpen && idx == 0 ? lastPostElementRef : null}
+                          className={
+                            msg.type === "user"
+                              ? "user-message-row"
+                              : "bot-message-row"
+                          }
+                        >
+                          {/* {(msg.type === "Agent" || msg.type === "bot") && (
+                          <img
+                            className="bot-avatar"
+                            src={require("../../../assets/logos/shirnk-logo.png")}
+                            alt="Bot"
+                          />
+                          <img src={agentPng} />
+                        )} */}
+
+                          {(msg.type === "Agent" ||
+                            msg.type === "bot" ||
+                            msg.type === "Thinking_Bot" ||
+                            msg.type === "user") && (
+                            <>
+                              {msg.type === "Agent" && (
+                                <img
+                                  className="bot-avatar"
+                                  src={agentPng}
+                                  alt="Agent"
+                                />
+                              )}
+
+                              {msg.type === "bot" && (
+                                <img
+                                  className="bot-avatar"
+                                  src={require("../../../assets/logos/shirnk-logo.png")}
+                                  alt="Bot"
+                                />
+                              )}
+
+                              {msg.type === "Thinking_Bot" && (
+                                <img
+                                  className="bot-avatar"
+                                  src={require("../../../assets/logos/shirnk-logo.png")}
+                                  alt="Bot"
+                                />
+                              )}
+                            </>
+                          )}
+
+                          <div
+                            className={`message-bubble ${
+                              msg.type === "user"
+                                ? "user-message"
+                                : "bot-message"
+                            }`}
+                          >
+                            {(() => {
+                              let dateValue;
+                              switch (msg.type) {
+                                case "Agent":
+                                  dateValue = msg?.time
+                                    ? new Date(msg.time)
+                                    : "";
+
+                                  return (
+                                    <p className="message_time">
+                                      Agent,&nbsp;
+                                      {dateValue.toLocaleString(undefined, {
+                                        year: "numeric",
+                                        month: "short",
+                                        day: "numeric",
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      })}
+                                    </p>
+                                  );
+
+                                case "bot":
+                                  dateValue = msg?.time
+                                    ? new Date(msg.time)
+                                    : "";
+
+                                  return (
+                                    <p className="message_time">
+                                      Ai bot,&nbsp;
+                                      {dateValue.toLocaleString(undefined, {
+                                        year: "numeric",
+                                        month: "short",
+                                        day: "numeric",
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      })}
+                                    </p>
+                                  );
+
+                                case "user":
+                                  dateValue = msg?.time
+                                    ? new Date(msg.time)
+                                    : "";
+
+                                  return (
+                                    <p className="message_time">
+                                      You,&nbsp;
+                                      {dateValue.toLocaleString(undefined, {
+                                        year: "numeric",
+                                        month: "short",
+                                        day: "numeric",
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      })}
+                                    </p>
+                                  );
+
+                                case "Thinking_Bot":
+                                  dateValue = msg?.time
+                                    ? new Date(msg.time)
+                                    : "";
+
+                                  return (
+                                    <p className="message_time">
+                                      Ai bot,&nbsp;
+                                      {dateValue.toLocaleString(undefined, {
+                                        year: "numeric",
+                                        month: "short",
+                                        day: "numeric",
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      })}
+                                    </p>
+                                  );
+
+                                default:
+                                  return <p>Unknown</p>;
+                              }
+                            })()}
+
+                            <LinkiFy options={clickableLinkProperties}>
+                              {msg.content || msg.text}
+                            </LinkiFy>
+                          </div>
+                          {/* <div>
+                          {msg.type === "user" && (
+                            <img
+                              className="user-avatar"
+                              src={UserPng}
+                              alt="User"
+                            />
+                          )}</div> */}
+                          {msg.type === "user" &&
+                          wsRef.current &&
+                          wsRef.current.readyState === WebSocket.OPEN &&
+                          paired === true ? (
+                            <div className="msg_recived_text">
+                              {msg.messageType}
+                            </div>
+                          ) : null}
+
+                          {msg.type === "user" &&
+                          // wsRef.current &&
+                          // wsRef.current.readyState === WebSocket.CLOSED &&
+                          paired === false ? (
+                            <div className="msg_recived_text">
+                              {msg.messageType}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+
+                      {showUserDetailModal && (
+                        <div className="bot-message-row">
+                          <img
+                            className="bot-avatar"
+                            src={require("../../../assets/logos/shirnk-logo.png")}
+                            alt="Bot"
+                          />
+                          <div className="message-bubble bot-message">
+                            <div className="user_detail_modal">
+                              <div className="user_detail_inner">
+                                <div className="modal-header">
+                                  <h4>
+                                    Please provide your details to connect with
+                                    agent
+                                  </h4>
+                                  <i
+                                    className="bi bi-x user_detail_modal_back_icon"
+                                    onClick={() => {
+                                      setShowUserDetailModal(false);
+                                      document.body.style.overflow = "auto";
+                                      toggleChat();
+                                      setUserDetail({
+                                        name: null,
+                                        email: null,
+                                        uniqueIdentity: null,
+                                      });
+                                    }}
+                                  ></i>
+                                </div>
+
+                                <div className="modal-body">
+                                  <div>
+                                    <div className="mb-20 chatbot-from">
+                                      <label className="form-label">
+                                        Name<span className="required">*</span>
+                                      </label>
+
+                                      <input
+                                        required={true}
+                                        type="text"
+                                        name="name"
+                                        placeholder="Enter name"
+                                        value={userDetail.name}
+                                        onChange={handleChange1}
+                                        className="form-control"
+                                      />
+                                      {ValidateName.test(userDetail.name) ===
+                                        false && userDetail.name ? (
+                                        <span className="invalid_email_msg">
+                                          Please enter valid Name
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <div className="mb-10 chatbot-from">
+                                      <label className="form-label">
+                                        Email<span className="required">*</span>
+                                      </label>
+
+                                      <input
+                                        required={true}
+                                        type="email"
+                                        name="email"
+                                        placeholder="Enter email"
+                                        value={userDetail.email}
+                                        onChange={handleChange2}
+                                        className="form-control"
+                                      />
+                                      {VailidateEmail.test(userDetail.email) ===
+                                        false && userDetail.email ? (
+                                        <span className="invalid_email_msg">
+                                          Please enter valid email
+                                        </span>
+                                      ) : null}
+                                    </div>
+
+                                    <button
+                                      onClick={submitUserDetail}
+                                      className="primary_btn mx-auto"
+                                    >
+                                      Send
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {connectToAgentBtn && (
+                        <div className="connect-expert-box">
+                          <p>Our team is available to chat.</p>
+                          <button
+                            onClick={async () => {
+                              setconnectToAgentBtn(false);
+                              connectToAgent();
+                            }}
+                            className="start-new-chat-btn connect-btn"
+                          >
+                            <img src={expertSvg} alt="Message" />
+                            Connect to an Expert
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Show typing indicator when agent is typing */}
+                      {isAgentTyping && (
+                        <div className="bot-message-row">
+                          <img
+                            className="bot-avatar"
+                            src={agentPng}
+                            alt="Bot"
+                          />
+                          <div className="message-bubble bot-message">
+                            <TypingDots />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* show latest message or number of message when user scroll in Top side or any message recived */}
+                      {showLatestMessage && (
+                        <div className="scroll-to-bottom-container">
+                          {messageCountUI > 0 ? (
+                            <span className="messageCount">
+                              <b>{messageCount.current}</b>
+                            </span>
+                          ) : null}
+                          <button
+                            className="scroll-btn"
+                            onClick={() => {
+                              endOfMessagesRef.current?.scrollIntoView({
+                                behavior: "smooth",
+                              });
+                              messageCount.current = 0;
+                              setMessageCountUI(0);
+                            }}
+                          >
+                            <AiOutlineArrowDown size={18} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div ref={endOfMessagesRef}></div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* ChatBot Chat Screen end */}
+
+            {showWarningModal && (
+              <ConfirmModal
+                title="Confirm Action"
+                message="You are already in a connection. Continuing will disconnect the current session."
+                confirmText="Continue"
+                cancelText="Cancel"
+                onClose={handleModalResponse}
+              />
+            )}
+
+            {showWarningModalForClearChat && (
+              <ConfirmModal
+                title="Secure & Exit"
+                message="This clears chat data from this device,
+                         so others can’t see it."
+                confirmText="Exit"
+                cancelText="Cancel"
+                onClose={handleModalResponse}
+              />
+            )}
+
+            {user.uniqueIdentity && !partner_disconnected ? (
+              <div className="chat-input-container">
+                {/* {user.uniqueIdentity && !partner_disconnected ? ( */}
+                <div className="chat-input-inner">
+                  <div className="input-wrapper">
+                    <textarea
+                      className="text-box"
+                      rows={1}
+                      placeholder="Type your message..."
+                      value={input}
+                      onChange={handleUserInput}
+                      maxLength={
+                        msgTOBot
+                          ? MAX_MESSAGE_TO_BOT_LENGTH
+                          : MAX_MESSAGE_TO_AGENT_LENGTH
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          if (!isSending && input.trim()) {
+                            handleSubmit();
+                          }
+                        }
+                      }}
+                    />
+                    <span
+                      className={`char-count ${
+                        input.length >=
+                        (msgTOBot
+                          ? MAX_MESSAGE_TO_BOT_LENGTH - 10
+                          : MAX_MESSAGE_TO_AGENT_LENGTH - 10)
+                          ? "char-warning"
+                          : ""
+                      }`}
+                    >
+                      {input.length}/
+                      {msgTOBot
+                        ? MAX_MESSAGE_TO_BOT_LENGTH
+                        : MAX_MESSAGE_TO_AGENT_LENGTH}
+                    </span>
+                    <button
+                      type="submit"
+                      className={`send-button ${isSending ? "thinking" : ""}`}
+                      onClick={handleSubmit}
+                      disabled={isSending}
+                    >
+                      {isSending ? (
+                        <FaSpinner
+                          className="spin"
+                          size={20}
+                          style={{ color: "#fff" }}
+                        />
+                      ) : (
+                        // <FaPaperPlane size={20} />
+                        <img src={sendSvg} alt="Send" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+                {/* ) : null} */}
+
+                {/* {!user.uniqueIdentity && !partner_disconnected ? (
+                <div className="chat-input-inner">
+                  <button
+                    type="submit"
+                    className="send-button"
+                    onClick={startChat}
+                    style={{ width: "100%", justifyContent: "center" }}
+                  >
+                    <i className="bi bi-send-fill send_icon"></i>
+                    <i>Start Chat</i>
+                  </button>
+                </div>
+              ) : null} */}
+              </div>
+            ) : null}
+
+            {/* {partner_disconnected ? (
+              <div className="chat-input-inner">
+                <button
+                  type="submit"
+                  className="send-button"
+                  onClick={ReconnectToAgent}
+                  style={{ width: "100%", justifyContent: "center" }}
+                >
+                  <i className="bi bi-send-fill send_icon"></i>
+                  <i>Reconnect Now</i>
+                </button>
+              </div>
+            ) : null} */}
+          </div>
+        </div>
+      </div>
+      {/* </Draggable> */}
+    </>
+  );
+}
+
+export default Chatbot;
