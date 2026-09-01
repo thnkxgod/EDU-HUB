@@ -1,42 +1,38 @@
-Ab clear ho gaya — ye ek **MIME type misconfiguration** hai server (production) side pe, code ka issue nahi hai.
+C:\Users\ASUS>
 
-**Kya ho raha hai:** Browser `.mjs` file ko ES module script ke roop me load karne ki koshish karta hai, jiske liye spec ke mutabik server ka `Content-Type` header `text/javascript` ya `application/javascript` hona chahiye. Aapka production server (`admin.techfeatures.ai`) `.mjs` file `application/octet-stream` ke saath serve kar raha hai — jo generic "binary file" type hai. Isliye strict MIME checking browser ko module load karne se rok deti hai. Local dev server (Vite/webpack dev server) correct MIME type khud handle kar leta hai, isliye local pe kaam kar raha hai — production static server (Nginx/Apache/CDN/S3 jo bhi ho) `.mjs` extension ko nahi pehchanta.
+Confirm ho gaya — index.html bhi application/octet-stream se serve ho raha hai (Content-Length: 727, jo HTML file jaisa chhota size hai). Ye pakka batata hai ki mime.types mapping poori tarah toot chuki hai, sirf .mjs ka issue nahi raha — ab poori site ke liye MIME detection fail ho raha hai.
 
-**Fix — server config me `.mjs` ka MIME type add karo:**
+Diagnose karne ke steps (in order):
 
-Agar **Nginx** use ho raha hai, `mime.types` file me (ya `nginx.conf` me `http` block ke andar):
-```
-types {
-    application/javascript mjs;
+1. Nginx config syntax test karo:
+
+bash
+sudo nginx -t
+Agar ye error deta hai, to wahi exact line number bata dega jahan problem hai — output share kar dena.
+
+2. mime.types file dekho ki kya likha hai:
+
+bash
+cat /etc/nginx/mime.types
+Check karo ki text/html wali line abhi bhi hai aur sahi se close ho rahi hai:
+
+text/html                                        html htm shtml;
+3. Check karo ki include mime.types; line nginx.conf ke http {} block me hai ya nahi (kahin accidentally delete to nahi ho gayi):
+
+bash
+grep -rn "mime.types" /etc/nginx/nginx.conf
+Ye kuch aisa dikhna chahiye:
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    ...
 }
-```
-Phir `nginx -s reload`.
+4. Check karo ki koi alag types {} block kahin add to nahi ho gaya (server block ya nginx.conf me), jo mime.types ke poore mapping ko override kar raha ho:
 
-Agar **Apache** hai, `.htaccess` ya config me:
-```
-AddType application/javascript .mjs
-```
+bash
+grep -rn "types {" /etc/nginx/
+Agar /etc/nginx/sites-enabled/ ya nginx.conf me alag se types { application/javascript mjs; } jaisa block mila (mime.types ke bahar), to yehi root cause hai — usse delete karo.
 
-Agar static files **S3 + CloudFront** ya kisi aur cloud storage se serve ho rahe hain — upload karte waqt `.mjs` files ka `Content-Type` metadata manually `application/javascript` (ya `text/javascript`) set karna padega, kyunki S3 default `.mjs` ko `application/octet-stream` treat karta hai. Agar CI/CD pipeline se deploy hota hai (jaise `aws s3 sync`), to command me content-type override add karo:
-```bash
-aws s3 cp build/static/media/ s3://your-bucket/static/media/ \
-  --recursive --exclude "*" --include "*.mjs" \
-  --content-type "application/javascript"
-```
+Ye 4 commands chalao aur output paste kar do, main exact line point out kar dunga jo fix karni hai.
 
-**Agar server config change karna abhi possible na ho (quick workaround):**
-`.mjs` worker ki jagah `pdfjs-dist` ka **legacy/UMD build** (`.js` extension) use karo, jise servers usually already sahi MIME type se serve karte hain:
-```js
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/legacy/build/pdf.worker.min.js",
-  import.meta.url
-).toString();
-```
-Ya phir CDN se hosted worker le lo (version `pdfjs-dist` package.json me jo installed hai usi se match karna):
-```js
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/<version>/pdf.worker.min.mjs";
-```
-CDN option production issue ko bypass kar deta hai kyunki file server-config pe depend nahi karti.
-
-Aapka server konsa hai (Nginx, Apache, S3/CloudFront, ya koi PaaS jaise Vercel/Netlify)? Bata do to exact config snippet de dunga.
